@@ -38,8 +38,8 @@
 typedef struct
 {
     int father, mother, child;      // VCF sample index
-    int prev, ipop;
-    uint32_t err, nswitch, ntest;
+    int prev_m, prev_f, ipop;
+    uint32_t err, nswitch_f, nswitch_m, ntest;
 }
 trio_t;
 
@@ -202,7 +202,11 @@ bcf1_t *process(bcf1_t *rec)
     if ( rec->rid!=args.prev_rid )
     {
         args.prev_rid = rec->rid;
-        for (i=0; i<args.ntrio; i++) args.trio[i].prev = 0;
+        for (i=0; i<args.ntrio; i++) 
+        {
+            args.trio[i].prev_f = 0;
+            args.trio[i].prev_m=0;
+        }
     }
 
     gt_t child, father, mother;
@@ -217,20 +221,45 @@ bcf1_t *process(bcf1_t *rec)
         if ( !parse_genotype(&father, args.gt_arr + ngt*trio->father) ) continue;
         if ( !parse_genotype(&mother, args.gt_arr + ngt*trio->mother) ) continue;
         if ( father.a+father.b == 1 && mother.a+mother.b == 1 ) continue;     // both parents are hets
-        if ( father.a+father.b == mother.a+mother.b ) { trio->err++; continue; }    // mendelian error
+        if ( father.a+father.b != 1 && mother.a+mother.b != 1 ) continue;     // both parents are not hets
+        if ( father.a+father.b == mother.a+mother.b ) { trio->err++; continue; }    // mendelian error	
 
-        int test_phase = 0; 
-        if ( father.a==father.b ) test_phase = 1 + (child.a==father.a);
-        else if ( mother.a==mother.b ) test_phase = 1 + (child.b==mother.a);
-        if ( trio->prev > 0 )
-        {
-            if ( trio->prev!=test_phase ) trio->nswitch++;
+        int test_phase_m = 0; 
+        int test_phase_f = 0; 
+        int par=0;
+        if ( father.a==father.b )
+	    {
+		    test_phase_m = 1 + ( child.b==mother.a );
+		    par=1;
+	    }
+	    else if ( mother.a==mother.b )
+	    {
+		    test_phase_f = 1 + ( child.a==father.a );
+		    par=2;
+	    }
+        else continue;
+        if ( par==1 )
+	{
+            if ( trio->prev_m > 0 )
+            {
+                if ( trio->prev_m!=test_phase_m ) trio->nswitch_m++;
+            }
+            trio->prev_m = test_phase_m;
         }
+        else if ( par==2 )
+        { 
+            if ( trio->prev_f > 0 )
+            {
+                if ( trio->prev_f!=test_phase_f ) trio->nswitch_f++;
+            }
+            trio->prev_f = test_phase_f;
+        } 
+        else continue; 
         trio->ntest++;
-        trio->prev = test_phase;
+
     }
     return NULL;
-}
+}	
 
 void destroy(void)
 {
@@ -239,22 +268,24 @@ void destroy(void)
     printf("# The command line was:\tbcftools +trio-switch-rate %s", args.argv[0]);
     for (i=1; i<args.argc; i++) printf(" %s",args.argv[i]);
     printf("\n#\n");
-    printf("# TRIO\t[2]Father\t[3]Mother\t[4]Child\t[5]nTested\t[6]nMendelian Errors\t[7]nSwitch\t[8]nSwitch (%%)\n");
+    printf("# TRIO\t[2]Father\t[3]Mother\t[4]Child\t[5]nTested\t[6]nMendelian Errors\t[7]nSwitch_father\t[8]nSwitch_mother\t[9]nSwitch_father(%%)\t[10]nSwitch_mother(%%)\n");
     for (i=0; i<args.ntrio; i++)
     {
         trio_t *trio = &args.trio[i];
-        printf("TRIO\t%s\t%s\t%s\t%d\t%d\t%d\t%.2f\n",
+        printf("TRIO\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%.2f\t%.2f\n",
             bcf_hdr_int2id(args.hdr,BCF_DT_SAMPLE,trio->father),
             bcf_hdr_int2id(args.hdr,BCF_DT_SAMPLE,trio->mother),
             bcf_hdr_int2id(args.hdr,BCF_DT_SAMPLE,trio->child),
-            trio->ntest, trio->err, trio->nswitch, trio->ntest ? trio->nswitch*100./trio->ntest : 0
+            trio->ntest, trio->err, trio->nswitch_f, trio->nswitch_m, trio->ntest ? trio->nswitch_f*100./trio->ntest : 0, trio->ntest ? trio->nswitch_m*100./trio->ntest : 0
         );
         if (args.npop) {
             pop_t *pop = &args.pop[trio->ipop];
             pop->err     += trio->err;
-            pop->nswitch += trio->nswitch;
+            pop->nswitch += trio->nswitch_f;
+	    pop->nswitch += trio->nswitch_m;
             pop->ntest   += trio->ntest;
-            pop->pswitch += trio->ntest ? trio->nswitch*100./trio->ntest : 0;
+            pop->pswitch += trio->ntest ? trio->nswitch_f*100./trio->ntest : 0;
+	    pop->pswitch += trio->ntest ? trio->nswitch_m*100./trio->ntest : 0;
         }
     }
     printf("# POP\tpopulation or other grouping defined by an optional 7-th column of the PED file\n");
